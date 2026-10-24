@@ -10,8 +10,6 @@ reused and what is new.
 
 ![NavEvolve demo](docs/media/demo.gif)
 
-▶️ [Watch the demo with sound (MP4)](docs/media/demo.mp4)
-
 ## What it does
 
 NavEvolve lets an agent search for objects in a 3D space, mimicking what a
