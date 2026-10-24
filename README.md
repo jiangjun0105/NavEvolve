@@ -29,10 +29,17 @@ real robot has to do when told "go find the mug".
 | Component | Role | Status |
 |---|---|---|
 | **Body** (`body/`) | 3D world (Three.js + Spark splats), human avatar, NavMesh-constrained WASD locomotion, minimap, egocentric frame capture (`frameCapture.js`) | ✅ working (reused) |
-| **Perception** (`brain/perception.py`) | ego JPEG + pose + camera + Gaussian-splat centre range → MongoDB `observations`; Gemini 3.8 Flash structured description + separate 768-d image and text embeddings (Gemini Embedding 2) on the same document | capture ✅ · enrichment ✅ (1 observation so far) |
+| **Perception** (`brain/perception.py`) | ego JPEG + pose + camera + Gaussian-splat centre range → MongoDB `observations`; Gemini 3.8 Flash structured description + separate 768-d image and text embeddings (Gemini Embedding 2) on the same document | ✅ |
 | **Object memory** (`brain/objects.py`) | `objects` collection: detected objects with approximate 3D positions grounded on the splat, sightings, supporting observations and the cognitive place they belong to | ✅ |
 | **Memory** (`brain/memory.py`) | cognitive map: observations replayed chronologically, matched to place memories by a weighted visual/semantic/range policy, places + traversal edges persisted in `cognitive_graphs` | ✅ |
 | **Harness** (`brain/harness.py`) | replays observations, measures missed revisits / false merges against pose-derived reference pairs (selection vs frozen held-out split), searches candidate policies, adopts only on improvement, persists `harness_policies` / `harness_runs`, rebuilds the graph | ✅ |
+| **Agent** (`brain/agent.py`) | object-finding loop RECALL → NAVIGATE → EXPLORE: checks memory first, walks to remembered objects, otherwise explores and verifies with the VLM | ✅ |
+| **Agent memory** (`brain/agent_memory.py`) | ingests observations into embeddings + world-positioned objects and searches them | ✅ |
+| **Agent link** (`brain/agent_ws.py`, `brain/body.py`, `body/src/agentLink.js`, `agentPanel.js`) | WebSocket `/agent/ws` between brain and browser; the agent drives the avatar (capture, goto) and streams its thoughts to the Talk tab and minimap | ✅ |
+| **Models** (`brain/models.py`) | Gemini clients via Google AI Studio (`GEMINI_API_KEY`); `fake_models.py` / `fake_body.py` give a 2-D grid world for offline tests | ✅ |
+| **Eval** (`eval/`) | ObjectNav benchmark (`run_objectnav.py`), memory kept vs wiped, HTML report (`report.py`) | ✅ |
+
+Design notes: `docs/AGENT_PLAN.md`, `docs/CONTRACTS.md`.
 
 ```
 body/   Vite app — main.js wires world.js, player.js, avatar.js, minimap.js, ui.js
@@ -46,8 +53,8 @@ brain/  FastAPI — server.py (endpoints), db.py (MongoDB, server-side only)
 ```bash
 cd brain
 python -m venv .venv
-.venv/Scripts/python -m pip install -r requirements-server.txt   # Windows
-cp .env.example .env    # set MONGODB_URI and MONGODB_DB
+.venv/Scripts/python -m pip install -r requirements-server.txt   # Windows (.venv/bin/python on macOS/Linux)
+cp .env.example .env    # set MONGODB_URI, MONGODB_DB, GEMINI_API_KEY
 .venv/Scripts/python -m uvicorn server:app --port 8000
 ```
 
@@ -68,8 +75,18 @@ cp .env.example .env    # set MONGODB_URI and MONGODB_DB
 | `POST /talk/choose` | Gemini picks a frontier from recent frames (Jun's CHOOSE prompt) |
 | `POST /cognitive-map/rebuild` | rebuild a scene's graph with the active policy; reports how one observation was placed |
 | `GET /cognitive-map` | latest cognitive graph (no vectors) + policy + harness status, drawn in the Cognitive Map panel; click a node to inspect that place's photos and descriptions |
+| `GET /observations/{id}` | one observation's metadata |
+| `POST /talk/intent` | Gemini classifies a Talk message into a supported intent |
+| `GET /objects/search` · `GET /objects/markers` | semantic object search · object markers for the minimap |
+| `POST /objects/backfill` · `/objects/embed-missing` · `/objects/refuse` · `/objects/relink` | object-memory maintenance |
+| `GET /places/find` · `GET /places/{id}/objects` | find a remembered place · objects seen in a place |
+| `POST /replay/episodes` | save a recorded navigation episode for replay |
+| `WS /agent/ws` | agent ↔ browser link (one browser at a time) |
 | `POST /sessions` | start a new capture session (observations kept) |
 | `DELETE /observations?expected=N[&scene_id=…]` | **local dev only** (loopback client + localhost Host; disable with `ALLOW_DEV_DELETE=0`): delete observations of one scene or all; `expected` must match the confirmed count |
+
+On macOS/Linux, `./dev.sh start | stop | status` runs local Mongo (Docker),
+the brain (port 8001) and the frontend together.
 
 **Frontend** — http://localhost:5000
 
@@ -113,13 +130,20 @@ The policy uses only Gemini image/text embeddings and the splat range.
 Simulator pose is used only for display and to derive approximate evaluation
 labels (same viewpoint: ≤ 1.5 m and ≤ 45°; different: ≥ 3 m).
 
+**ObjectNav eval** (from `brain/`):
+
+```bash
+python ../eval/run_objectnav.py --scene interior_0759_839979 --n 10 --mode both   # --fake: no browser
+python ../eval/report.py ../eval/results/*.json                                     # -> eval/report.html
+```
+
 ## Talk to the NavEvolve Agent
 
 Type in the **Talk** tab (or press Enter). The agent answers as "NavEvolve Agent". Supported:
 
-| You say | Seekr does |
+| You say | Agent does |
 |---|---|
-| `Seekr, what places do you remember?` | lists the cognitive map's places with their descriptions |
+| `What places do you remember?` | lists the cognitive map's places with their descriptions |
 | `Have you seen a dining table?` | searches stored Gemini descriptions; reports when/where, or "no memory" |
 | `Explore this area` / `Explore a large area` / `Explore and tell me what you discover` | autonomous, narrated exploration: looks around, enriches the view, says whether it recognizes the place, picks a frontier with Gemini and explains why, walks, repeats within a bounded budget (local 3 steps / large 8), then summarizes real counts and coverage |
 | `Find the teapot` / `Find the dining table` | searches object memory, then remembered descriptions; walks there and verifies with Gemini; if nothing is known or verification fails, **explores unseen frontiers autonomously** (bounded: 6 steps / 4 min), detecting and remembering objects as it goes; reports "Object verified" or "Not found" |
