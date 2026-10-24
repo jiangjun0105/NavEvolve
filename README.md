@@ -8,7 +8,7 @@ Built for the Cerebral Valley Harness Engineering & Model Wrangling Hackathon
 on top of the pre-hackathon Seekr Body. `PROVENANCE.md` lists exactly what was
 reused and what is new.
 
-![NavEvolve demo](docs/media/demo.gif)
+![NavEvolve demo](docs/media/demo.webp)
 
 ## What it does
 
